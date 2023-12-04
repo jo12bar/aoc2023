@@ -30,10 +30,10 @@ fn main() -> eyre::Result<()> {
         tui.draw(&mut app)?;
         // Handle events.
         match tui.events.next()? {
-            Event::Tick => {}
+            Event::Tick => {},
             Event::Key(key_event) => update(&mut app, key_event),
-            Event::Mouse(_) => {}
-            Event::Resize(_, _) => {}
+            Event::Mouse(_) => {},
+            Event::Resize(_, _) => {},
         };
     }
 

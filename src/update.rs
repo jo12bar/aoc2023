@@ -12,11 +12,11 @@ pub fn update(app: &mut App, key_event: KeyEvent) {
             if key_event.modifiers == KeyModifiers::CONTROL {
                 app.quit()
             }
-        }
+        },
 
         KeyCode::Right | KeyCode::Char('j') => app.increment_counter(),
         KeyCode::Left | KeyCode::Char('k') => app.decrement_counter(),
 
-        _ => {}
+        _ => {},
     }
 }

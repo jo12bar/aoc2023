@@ -80,7 +80,7 @@ fn event_poller(sender: mpsc::Sender<Event>, tick_rate: Duration) {
                     } else {
                         Ok(()) // ignore KeyEventKind::Release
                     }
-                }
+                },
 
                 CrosstermEvent::Mouse(e) => sender.send(Event::Mouse(e)),
 
