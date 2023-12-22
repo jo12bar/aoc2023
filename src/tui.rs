@@ -271,7 +271,7 @@ impl Tui {
         self.exit()?;
 
         #[cfg(not(windows))]
-        signal_hook::low_level::raise(signal_hook::consts::signal::SIGTSTP);
+        signal_hook::low_level::raise(signal_hook::consts::signal::SIGTSTP)?;
 
         Ok(())
     }
