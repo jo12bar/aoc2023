@@ -1,43 +1,42 @@
-use color_eyre::eyre;
-use ratatui::{backend::CrosstermBackend, Terminal};
-
+pub mod action;
 pub mod app;
-pub mod event;
+pub mod cli;
+pub mod components;
+pub mod config;
+pub mod mode;
 pub mod tui;
-pub mod ui;
-pub mod update;
+pub mod utils;
 
-use app::App;
-use event::{Event, EventHandler};
-use tui::Tui;
-use update::update;
+use clap::Parser;
+use color_eyre::eyre::Result;
 
-fn main() -> eyre::Result<()> {
-    color_eyre::install()?;
+use crate::{
+    app::App,
+    cli::Cli,
+    utils::{initialize_logging, initialize_panic_handler, version},
+};
 
-    let mut app = App::new();
-
-    // Init terminal user interface
-    let backend = CrosstermBackend::new(std::io::stderr());
-    let terminal = Terminal::new(backend)?;
-    let events = EventHandler::new(16); // 16ms for 60fps drawing
-    let mut tui = Tui::new(terminal, events);
-    tui.enter()?;
-
-    // Main loop
-    while !app.should_quit {
-        // Render the user interface
-        tui.draw(&mut app)?;
-        // Handle events.
-        match tui.events.next()? {
-            Event::Tick => {},
-            Event::Key(key_event) => update(&mut app, key_event),
-            Event::Mouse(_) => {},
-            Event::Resize(_, _) => {},
-        };
+#[tokio::main]
+async fn main() -> Result<()> {
+    if let Err(e) = tokio_main().await {
+        eprintln!(
+            "{} {} error: Something went wrong",
+            env!("CARGO_PKG_NAME"),
+            version()
+        );
+        Err(e)
+    } else {
+        Ok(())
     }
+}
 
-    // Exit the user interface
-    tui.exit()?;
+async fn tokio_main() -> Result<()> {
+    initialize_panic_handler()?;
+    initialize_logging()?;
+
+    let args = Cli::parse();
+    let mut app = App::new(args.tick_rate, args.frame_rate)?;
+    app.run().await?;
+
     Ok(())
 }
