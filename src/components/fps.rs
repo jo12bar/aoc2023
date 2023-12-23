@@ -7,6 +7,12 @@ use super::{Component, ComponentError};
 use crate::{action::Action, tui::Frame};
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Ticker {
+    AppTick,
+    RenderTick,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FpsCounter {
     app_start_time: Instant,
     app_frames: u32,

@@ -89,7 +89,7 @@ impl App {
                     tui::Event::Key(key) => {
                         if let Some(keymap) = self.config.keybindings.get(&self.mode) {
                             if let Some(action) = keymap.get(&vec![key]) {
-                                tracing::info!(?action, "Sending single-key action from TUI");
+                                tracing::trace!(?action, "Sending single-key action from TUI");
                                 action_tx.send(action.clone())?;
                             } else {
                                 // If the key was not handled as a single-key action, then consider
@@ -98,7 +98,7 @@ impl App {
 
                                 // Check for multi-key combinations
                                 if let Some(action) = keymap.get(&self.last_tick_key_events) {
-                                    tracing::info!(?action, "Sending multi-key action from TUI");
+                                    tracing::trace!(?action, "Sending multi-key action from TUI");
                                     action_tx.send(action.clone())?;
                                 }
                             }
@@ -122,7 +122,7 @@ impl App {
             // Receive all actions from the MPSC channel, and act on them.
             while let Ok(action) = action_rx.try_recv() {
                 if action != Action::Tick && action != Action::Render {
-                    tracing::debug!(?action, "Received action");
+                    tracing::trace!(?action, "Received action");
                 }
 
                 match action {

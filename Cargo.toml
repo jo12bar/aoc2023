@@ -47,3 +47,4 @@ tracing-subscriber = { version = "0.3.18", features = [
     "json",
     "ansi",
 ] }
+tui-input = "0.8.0"
