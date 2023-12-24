@@ -1,9 +1,13 @@
-use crate::message::Message;
+use ratatui::layout::Rect;
+
+use crate::{fps_counter, message::Message, tui::Tui};
 
 #[derive(Debug, Default)]
 pub struct Model {
     pub counter: i32,
     pub running_state: RunningState,
+    pub tui_size: Rect,
+    pub fps_counter: fps_counter::FpsCounterModel,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -12,6 +16,13 @@ pub enum RunningState {
     Running,
     ShouldQuit,
     ShouldSuspend,
+}
+
+pub fn init(tui: &Tui) -> Model {
+    Model {
+        tui_size: tui.size().unwrap(),
+        ..Default::default()
+    }
 }
 
 pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
@@ -35,13 +46,21 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             model.running_state = RunningState::ShouldQuit;
         },
         Message::Render => {
-            // TODO(jo12bar): Update frame render counter.
+            return Some(Message::FpsCounterMessage(
+                fps_counter::FpsCounterMessage::Render,
+            ));
         },
         Message::Tick => {
-            // TODO(jo12bar): Update app tick counter.
+            return Some(Message::FpsCounterMessage(
+                fps_counter::FpsCounterMessage::Tick,
+            ));
         },
-        Message::Resize(_, _) => {
-            // TODO(jo12bar): Update app size tracker.
+        Message::Resize(w, h) => {
+            model.tui_size.width = w;
+            model.tui_size.height = h;
+        },
+        Message::FpsCounterMessage(m) => {
+            return fps_counter::update(model, m);
         },
     }
     None

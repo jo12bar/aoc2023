@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cli;
+pub mod fps_counter;
 pub mod message;
 pub mod model;
 pub mod termination;

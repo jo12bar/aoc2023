@@ -5,7 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::{
     message::Message,
-    model::{update, Model, RunningState},
+    model::{self, RunningState},
     termination::{Interrupted, Terminator},
     tui::{self, TuiEvent},
     view::view,
@@ -46,7 +46,7 @@ impl App {
         tui.enter()
             .wrap_err("Error entering text user interface (TUI) mode")?;
 
-        let mut model = Model::default();
+        let mut model = model::init(&tui);
 
         loop {
             // Wait for the TUI to offer up an event.
@@ -83,7 +83,7 @@ impl App {
                 // Process messages to update the model. Loop until the update function stops
                 // returning new messages.
                 while current_message.is_some() {
-                    current_message = update(&mut model, current_message.unwrap())
+                    current_message = model::update(&mut model, current_message.unwrap())
                 }
             }
 

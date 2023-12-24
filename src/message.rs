@@ -1,3 +1,5 @@
+use crate::fps_counter;
+
 #[derive(Debug, PartialEq)]
 pub enum Message {
     Increment,
@@ -7,4 +9,5 @@ pub enum Message {
     Resize(u16, u16),
     Reset,
     Quit,
+    FpsCounterMessage(fps_counter::FpsCounterMessage),
 }
