@@ -1,0 +1,10 @@
+[package]
+name = "aoc2023-common"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true

@@ -1,57 +1,43 @@
 use color_eyre::eyre::{Result, WrapErr};
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::Rect;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 use crate::{
-    action::Action,
-    components::{fps::FpsCounter, home::Home, Component},
-    config::Config,
-    mode::Mode,
-    tui,
+    message::Message,
+    model::{update, Model, RunningState},
+    termination::{Interrupted, Terminator},
+    tui::{self, TuiEvent},
+    view::view,
 };
 
 pub struct App {
-    /// Application config.
-    pub config: Config,
     /// How fast to tick the TUI at.
-    pub tick_rate: f64,
+    tick_rate: f64,
     /// Rendering frame per second cap.
-    pub frame_rate: f64,
-    /// Components to render.
-    pub components: Vec<Box<dyn Component>>,
-    /// If true, the app will quit on the next render cycle (and shut down the simulation).
-    pub should_quit: bool,
-    /// If true, the app will suspend rendering and run in the background.
-    pub should_suspend: bool,
-    /// Current mode the app is in.
-    pub mode: Mode,
-    /// Key events that happened during the last TUI tick.
-    pub last_tick_key_events: Vec<KeyEvent>,
+    frame_rate: f64,
+    /// Allows for terminating background threads.
+    terminator: Terminator,
+    // /// Receiver for termination messages from the main thread.
+    // termination_rx: broadcast::Receiver<Interrupted>,
 }
 
 impl App {
-    pub fn new(tick_rate: f64, frame_rate: f64) -> Result<Self> {
-        let home = Home::new();
-        let fps = FpsCounter::default();
-        let config = Config::new().wrap_err("Error initializing app config")?;
-        let mode = Mode::Home;
-
+    pub fn new(
+        tick_rate: f64,
+        frame_rate: f64,
+        terminator: Terminator,
+        _termination_rx: broadcast::Receiver<Interrupted>,
+    ) -> Result<Self> {
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![Box::new(home), Box::new(fps)],
-            should_quit: false,
-            should_suspend: false,
-            config,
-            mode,
-            last_tick_key_events: Vec::new(),
+            terminator,
+            // termination_rx,
         })
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let (action_tx, mut action_rx) = mpsc::unbounded_channel();
-
         let mut tui = tui::Tui::new()
             .wrap_err("Error initializing text user interface (TUI)")?
             .tick_rate(self.tick_rate)
@@ -60,144 +46,64 @@ impl App {
         tui.enter()
             .wrap_err("Error entering text user interface (TUI) mode")?;
 
-        for component in self.components.iter_mut() {
-            component
-                .register_action_handler(action_tx.clone())
-                .wrap_err("Error registering action handler with a TUI component")?;
-            component
-                .register_config_handler(self.config.clone())
-                .wrap_err("Error registering config handler with a TUI component")?;
-            component
-                .init(tui.size().wrap_err("Error getting TUI size")?)
-                .wrap_err("Error initializing component")?;
-        }
+        let mut model = Model::default();
 
         loop {
             // Wait for the TUI to offer up an event.
             if let Some(e) = tui.next().await {
-                // Send actions based on what the TUI coughed up.
-                match e {
-                    tui::Event::Quit => action_tx.send(Action::Quit)?,
+                // Handle events from the TUI and map to a message
+                let mut current_message = match e {
+                    TuiEvent::Quit => Some(Message::Quit),
 
-                    tui::Event::Tick => action_tx.send(Action::Tick)?,
-                    tui::Event::Render => action_tx.send(Action::Render)?,
+                    TuiEvent::Tick => Some(Message::Tick),
 
-                    tui::Event::Resize(x, y) => action_tx.send(Action::Resize(x, y))?,
-
-                    // Check if a key event matchs something from the keybindings, and send an action
-                    // if it does.
-                    tui::Event::Key(key) => {
-                        if let Some(keymap) = self.config.keybindings.get(&self.mode) {
-                            if let Some(action) = keymap.get(&vec![key]) {
-                                tracing::trace!(?action, "Sending single-key action from TUI");
-                                action_tx.send(action.clone())?;
-                            } else {
-                                // If the key was not handled as a single-key action, then consider
-                                // it for multi-key combinations
-                                self.last_tick_key_events.push(key);
-
-                                // Check for multi-key combinations
-                                if let Some(action) = keymap.get(&self.last_tick_key_events) {
-                                    tracing::trace!(?action, "Sending multi-key action from TUI");
-                                    action_tx.send(action.clone())?;
-                                }
-                            }
-                        }
+                    // Render if the TUI says we should.
+                    TuiEvent::Render => {
+                        tui.draw(|f| view(&mut model, f))
+                            .wrap_err("Error rendering TUI")?;
+                        Some(Message::Render)
                     },
 
-                    _ => {},
-                }
-
-                // Let the components handle their own events and send off actions.
-                for component in self.components.iter_mut() {
-                    if let Some(action) = component
-                        .handle_events(Some(e.clone()))
-                        .wrap_err("Error handling events in a TUI component")?
-                    {
-                        action_tx.send(action)?;
-                    }
-                }
-            }
-
-            // Receive all actions from the MPSC channel, and act on them.
-            while let Ok(action) = action_rx.try_recv() {
-                if action != Action::Tick && action != Action::Render {
-                    tracing::trace!(?action, "Received action");
-                }
-
-                match action {
-                    // On TUI tick, drain all the key events that occurred during the tick.
-                    Action::Tick => {
-                        self.last_tick_key_events.drain(..);
-                    },
-
-                    Action::Quit => self.should_quit = true,
-                    Action::Suspend => self.should_suspend = true,
-                    Action::Resume => self.should_suspend = false,
-
-                    // Redraw everything if the console resizes.
-                    Action::Resize(w, h) => {
+                    // Re-render if the TUI has been resized
+                    TuiEvent::Resize(w, h) => {
                         tui.resize(Rect::new(0, 0, w, h))
                             .wrap_err("Error resizing TUI")?;
-                        tui.draw(|f| {
-                            for component in self.components.iter_mut() {
-                                let r = component.draw(f, f.size());
-                                if let Err(e) = r {
-                                    action_tx
-                                        .send(Action::Error(format!(
-                                            "Failed to draw during resize: {e:?}"
-                                        )))
-                                        .unwrap();
-                                }
-                            }
-                        })
-                        .wrap_err("Error redrawing TUI while handling resize event")?;
+
+                        tui.draw(|f| view(&mut model, f))
+                            .wrap_err("Error re-rendering TUI after resize")?;
+
+                        Some(Message::Resize(w, h))
                     },
 
-                    // Render all the stuff.
-                    Action::Render => {
-                        tui.draw(|f| {
-                            for component in self.components.iter_mut() {
-                                let r = component.draw(f, f.size());
-                                if let Err(e) = r {
-                                    action_tx
-                                        .send(Action::Error(format!("Failed to draw: {e:?}")))
-                                        .unwrap();
-                                }
-                            }
-                        })
-                        .wrap_err("Error drawing TUI")?;
-                    },
+                    TuiEvent::Key(key) => handle_key_event(key),
 
-                    _ => {},
-                }
+                    _ => None,
+                };
 
-                // Update the components, and send along their actions to be handled this frame
-                // (since we're still in the action MPSC receiving loop).
-                for component in self.components.iter_mut() {
-                    if let Some(action) = component
-                        .update(action.clone())
-                        .wrap_err("Error updating a TUI component")?
-                    {
-                        action_tx.send(action)?;
-                    }
+                // Process messages to update the model. Loop until the update function stops
+                // returning new messages.
+                while current_message.is_some() {
+                    current_message = update(&mut model, current_message.unwrap())
                 }
             }
 
-            if self.should_suspend {
-                // Suspend the TUI
-                tui.suspend().wrap_err("Error suspending TUI")?;
-                // Queue a resume action for as soon as the app is unsuspended
-                action_tx.send(Action::Resume)?;
-                tui = tui::Tui::new()
-                    .wrap_err("Error re-initializing TUI after suspend")?
-                    .tick_rate(self.tick_rate)
-                    .frame_rate(self.frame_rate);
-                // tui.mouse(true)
-                tui.enter()
-                    .wrap_err("Error entering TUI mode after suspend")?;
-            } else if self.should_quit {
+            if model.running_state == RunningState::ShouldSuspend {
+                // TODO(jo12bar): Implement suspension
+
+                // // Suspend the TUI
+                // tui.suspend().wrap_err("Error suspending TUI")?;
+                // // Queue a resume action for as soon as the app is unsuspended
+                // action_tx.send(Action::Resume)?;
+                // tui = tui::Tui::new()
+                //     .wrap_err("Error re-initializing TUI after suspend")?
+                //     .tick_rate(self.tick_rate)
+                //     .frame_rate(self.frame_rate);
+                // // tui.mouse(true)
+                // tui.enter()
+                //     .wrap_err("Error entering TUI mode after suspend")?;
+            } else if model.running_state == RunningState::ShouldQuit {
                 tui.stop().wrap_err("Error stopping TUI")?;
+                self.terminator.terminate(Interrupted::UserInt)?;
                 break;
             }
         }
@@ -205,4 +111,17 @@ impl App {
         tui.exit().wrap_err("Error exiting TUI mode")?;
         Ok(())
     }
+}
+
+fn handle_key_event(key: KeyEvent) -> Option<Message> {
+    if key.kind == KeyEventKind::Press {
+        return match key.code {
+            KeyCode::Char('j') => Some(Message::Increment),
+            KeyCode::Char('k') => Some(Message::Decrement),
+            KeyCode::Char('q') => Some(Message::Quit),
+            _ => None,
+        };
+    }
+
+    None
 }

@@ -31,8 +31,8 @@ pub fn io() -> IO {
 pub type Frame<'a> = ratatui::Frame<'a>;
 
 /// Events to/from the TUI.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Event {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum TuiEvent {
     /// TUI is initialized.
     Init,
     /// TUI is quitting.
@@ -68,9 +68,9 @@ pub struct Tui {
     /// Cancellation token to shut down the event-handling task.
     pub cancellation_token: CancellationToken,
     /// Unbounded event receiver.
-    pub event_rx: UnboundedReceiver<Event>,
+    pub event_rx: UnboundedReceiver<TuiEvent>,
     /// Unbounded event sender.
-    pub event_tx: UnboundedSender<Event>,
+    pub event_tx: UnboundedSender<TuiEvent>,
     /// Rendering frame rate.
     pub frame_rate: f64,
     /// Event-handling tick rate.
@@ -145,7 +145,7 @@ impl Tui {
             let mut tick_interval = tokio::time::interval(tick_delay);
             let mut render_interval = tokio::time::interval(render_delay);
 
-            event_tx.send(Event::Init).unwrap();
+            event_tx.send(TuiEvent::Init).unwrap();
 
             loop {
                 let tick_delay = tick_interval.tick();
@@ -158,41 +158,41 @@ impl Tui {
                     maybe_event = crossterm_event => {
                         match maybe_event {
                             Some(Err(_)) => {
-                                event_tx.send(Event::Error).unwrap();
+                                event_tx.send(TuiEvent::Error).unwrap();
                             }
                             None => {}
 
                             Some(Ok(evt)) => match evt {
                                 CrosstermEvent::Key(key) => {
                                     if key.kind == KeyEventKind::Press {
-                                        event_tx.send(Event::Key(key)).unwrap();
+                                        event_tx.send(TuiEvent::Key(key)).unwrap();
                                     }
                                 }
                                 CrosstermEvent::Mouse(mouse) => {
-                                    event_tx.send(Event::Mouse(mouse)).unwrap();
+                                    event_tx.send(TuiEvent::Mouse(mouse)).unwrap();
                                 }
                                 CrosstermEvent::Resize(x, y) => {
-                                    event_tx.send(Event::Resize(x, y)).unwrap();
+                                    event_tx.send(TuiEvent::Resize(x, y)).unwrap();
                                 },
                                 CrosstermEvent::FocusLost => {
-                                    event_tx.send(Event::FocusLost).unwrap();
+                                    event_tx.send(TuiEvent::FocusLost).unwrap();
                                 },
                                 CrosstermEvent::FocusGained => {
-                                    event_tx.send(Event::FocusGained).unwrap();
+                                    event_tx.send(TuiEvent::FocusGained).unwrap();
                                 },
                                 CrosstermEvent::Paste(s) => {
-                                    event_tx.send(Event::Paste(s)).unwrap();
+                                    event_tx.send(TuiEvent::Paste(s)).unwrap();
                                 },
                             }
                         }
                     }
 
                     _ = tick_delay => {
-                        event_tx.send(Event::Tick).unwrap();
+                        event_tx.send(TuiEvent::Tick).unwrap();
                     }
 
                     _ = render_delay => {
-                        event_tx.send(Event::Render).unwrap();
+                        event_tx.send(TuiEvent::Render).unwrap();
                     }
                 }
             }
@@ -277,13 +277,13 @@ impl Tui {
     }
 
     /// Resume the TUI after the app resumes.
-    pub fn resumt(&mut self) -> Result<()> {
+    pub fn resume(&mut self) -> Result<()> {
         self.enter()?;
         Ok(())
     }
 
     /// Await and return the next event from the events channel.
-    pub async fn next(&mut self) -> Option<Event> {
+    pub async fn next(&mut self) -> Option<TuiEvent> {
         self.event_rx.recv().await
     }
 }
