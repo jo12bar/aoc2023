@@ -68,7 +68,7 @@ pub struct Tui {
     /// Cancellation token to shut down the event-handling task.
     pub cancellation_token: CancellationToken,
     /// Unbounded event receiver.
-    pub event_rx: UnboundedReceiver<TuiEvent>,
+    pub event_rx: Option<UnboundedReceiver<TuiEvent>>,
     /// Unbounded event sender.
     pub event_tx: UnboundedSender<TuiEvent>,
     /// Rendering frame rate.
@@ -96,7 +96,7 @@ impl Tui {
             terminal,
             task,
             cancellation_token,
-            event_rx,
+            event_rx: Some(event_rx),
             event_tx,
             frame_rate,
             tick_rate,
@@ -282,9 +282,11 @@ impl Tui {
         Ok(())
     }
 
-    /// Await and return the next event from the events channel.
-    pub async fn next(&mut self) -> Option<TuiEvent> {
-        self.event_rx.recv().await
+    /// Take ownership of the TUI's event receiver.
+    ///
+    /// Returns `None` if the event receiver has already been taken.
+    pub fn take_event_rx(&mut self) -> Option<UnboundedReceiver<TuiEvent>> {
+        self.event_rx.take()
     }
 }
 

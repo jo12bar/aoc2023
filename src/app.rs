@@ -1,13 +1,17 @@
+use std::pin::pin;
+
 use color_eyre::eyre::{Result, WrapErr};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use futures::{prelude::*, stream_select};
 use ratatui::prelude::Rect;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc::channel};
 
 use crate::{
+    command::{self, process_cmd},
     message::Message,
     model::{self, RunningState},
+    subscriptions::{subscriptions, tui_event_subscription},
     termination::{Interrupted, Terminator},
-    tui::{self, TuiEvent},
+    tui::{self},
     view::view,
 };
 
@@ -18,8 +22,9 @@ pub struct App {
     frame_rate: f64,
     /// Allows for terminating background threads.
     terminator: Terminator,
-    // /// Receiver for termination messages from the main thread.
-    // termination_rx: broadcast::Receiver<Interrupted>,
+    /// Receiver for termination messages from the main thread.
+    #[allow(unused)]
+    termination_rx: broadcast::Receiver<Interrupted>,
 }
 
 impl App {
@@ -27,13 +32,13 @@ impl App {
         tick_rate: f64,
         frame_rate: f64,
         terminator: Terminator,
-        _termination_rx: broadcast::Receiver<Interrupted>,
+        termination_rx: broadcast::Receiver<Interrupted>,
     ) -> Result<Self> {
         Ok(Self {
             tick_rate,
             frame_rate,
             terminator,
-            // termination_rx,
+            termination_rx,
         })
     }
 
@@ -46,82 +51,89 @@ impl App {
         tui.enter()
             .wrap_err("Error entering text user interface (TUI) mode")?;
 
-        let mut model = model::init(&tui);
+        let (msg_tx, msg_rx) = channel::<Message>(1);
 
-        loop {
-            // Wait for the TUI to offer up an event.
-            if let Some(e) = tui.next().await {
-                // Handle events from the TUI and map to a message
-                let mut current_message = match e {
-                    TuiEvent::Quit => Some(Message::Quit),
+        let (init_model, init_cmd) = model::init(&tui);
 
-                    TuiEvent::Tick => Some(Message::Tick),
+        command::process_cmd(init_cmd, msg_tx.clone());
 
-                    // Render if the TUI says we should.
-                    TuiEvent::Render => {
-                        tui.draw(|f| view(&mut model, f))
-                            .wrap_err("Error rendering TUI")?;
-                        Some(Message::Render)
-                    },
+        let (mut model, subs) = subscriptions(init_model);
+        let tui_event_sub = tui_event_subscription(
+            tui.take_event_rx()
+                .expect("TUI event receiver should not already be taken, but it is"),
+        );
 
-                    // Re-render if the TUI has been resized
-                    TuiEvent::Resize(w, h) => {
-                        tui.resize(Rect::new(0, 0, w, h))
-                            .wrap_err("Error resizing TUI")?;
+        let msgs = tokio_stream::wrappers::ReceiverStream::new(msg_rx);
+        let mut combined_msgs_stream = pin!(stream_select!(tui_event_sub, subs, msgs).fuse());
 
-                        tui.draw(|f| view(&mut model, f))
-                            .wrap_err("Error re-rendering TUI after resize")?;
+        while let Some(msg) = combined_msgs_stream.next().await {
+            let should_render = msg == Message::Render;
+            let resize_params = if let Message::Resize(w, h) = msg {
+                Some((w, h))
+            } else {
+                None
+            };
 
-                        Some(Message::Resize(w, h))
-                    },
+            let (new_model, cmd) = model::update(model, msg);
+            model = new_model;
 
-                    TuiEvent::Key(key) => handle_key_event(key),
+            process_cmd(cmd, msg_tx.clone());
 
-                    _ => None,
-                };
-
-                // Process messages to update the model. Loop until the update function stops
-                // returning new messages.
-                while current_message.is_some() {
-                    current_message = model::update(&mut model, current_message.unwrap())
-                }
+            if let Some((w, h)) = resize_params {
+                tui.resize(Rect::new(0, 0, w, h))
+                    .wrap_err("Error resizing TUI")?;
             }
 
-            if model.running_state == RunningState::ShouldSuspend {
-                // TODO(jo12bar): Implement suspension
+            if should_render || resize_params.is_some() {
+                tui.draw(|f| view(&mut model, f))
+                    .wrap_err("Error rendering TUI")?;
+            }
 
-                // // Suspend the TUI
-                // tui.suspend().wrap_err("Error suspending TUI")?;
-                // // Queue a resume action for as soon as the app is unsuspended
-                // action_tx.send(Action::Resume)?;
-                // tui = tui::Tui::new()
-                //     .wrap_err("Error re-initializing TUI after suspend")?
-                //     .tick_rate(self.tick_rate)
-                //     .frame_rate(self.frame_rate);
-                // // tui.mouse(true)
-                // tui.enter()
-                //     .wrap_err("Error entering TUI mode after suspend")?;
-            } else if model.running_state == RunningState::ShouldQuit {
+            if model.running_state == RunningState::ShouldQuit {
                 tui.stop().wrap_err("Error stopping TUI")?;
+                tui.exit().wrap_err("Error exiting TUI mode")?;
                 self.terminator.terminate(Interrupted::UserInt)?;
                 break;
             }
         }
 
-        tui.exit().wrap_err("Error exiting TUI mode")?;
+        // // Process messages to update the model. Loop until the update function stops
+        // // returning new messages.
+        // while current_message.is_some() {
+        //     current_message = model::update(&mut model, current_message.unwrap())
+        // }
+
+        // if model.running_state == RunningState::ShouldSuspend {
+        //     // TODO(jo12bar): Implement suspension
+
+        //     // // Suspend the TUI
+        //     // tui.suspend().wrap_err("Error suspending TUI")?;
+        //     // // Queue a resume action for as soon as the app is unsuspended
+        //     // action_tx.send(Action::Resume)?;
+        //     // tui = tui::Tui::new()
+        //     //     .wrap_err("Error re-initializing TUI after suspend")?
+        //     //     .tick_rate(self.tick_rate)
+        //     //     .frame_rate(self.frame_rate);
+        //     // // tui.mouse(true)
+        //     // tui.enter()
+        //     //     .wrap_err("Error entering TUI mode after suspend")?;
+        // } else if model.running_state == RunningState::ShouldQuit {
+        //     tui.stop().wrap_err("Error stopping TUI")?;
+        //     self.terminator.terminate(Interrupted::UserInt)?;
+        //     tui.exit().wrap_err("Error exiting TUI mode")?;
+        //     break;
+        // }
+
         Ok(())
     }
 }
 
-fn handle_key_event(key: KeyEvent) -> Option<Message> {
-    if key.kind == KeyEventKind::Press {
-        return match key.code {
-            KeyCode::Char('j') => Some(Message::Increment),
-            KeyCode::Char('k') => Some(Message::Decrement),
-            KeyCode::Char('q') => Some(Message::Quit),
-            _ => None,
-        };
-    }
-
-    None
-}
+// async fn flatten<T, E: Send + Sync + std::error::Error + 'static>(
+//     handle: JoinHandle<Result<T, E>>,
+// ) -> Result<T> {
+//     match handle.await {
+//         Ok(Ok(res)) => Ok(res),
+//         Ok(Err(e)) => Err(e).wrap_err("Error in task"),
+//         Err(e) => Err(e).wrap_err("Error joining task"),
+//     }
+// }

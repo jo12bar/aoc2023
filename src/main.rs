@@ -1,8 +1,10 @@
 pub mod app;
 pub mod cli;
+pub mod command;
 pub mod fps_counter;
 pub mod message;
 pub mod model;
+pub mod subscriptions;
 pub mod termination;
 pub mod tui;
 pub mod utils;

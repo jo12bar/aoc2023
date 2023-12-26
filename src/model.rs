@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 
-use crate::{fps_counter, message::Message, tui::Tui};
+use crate::{command::Cmd, fps_counter, message::Message, tui::Tui};
 
 #[derive(Debug, Default)]
 pub struct Model {
@@ -18,25 +18,28 @@ pub enum RunningState {
     ShouldSuspend,
 }
 
-pub fn init(tui: &Tui) -> Model {
-    Model {
-        tui_size: tui.size().unwrap(),
-        ..Default::default()
-    }
+pub fn init(tui: &Tui) -> (Model, Cmd<Message>) {
+    (
+        Model {
+            tui_size: tui.size().unwrap(),
+            ..Default::default()
+        },
+        Cmd::None,
+    )
 }
 
-pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
+pub fn update(mut model: Model, msg: Message) -> (Model, Cmd<Message>) {
     match msg {
         Message::Increment => {
             model.counter += 1;
             if model.counter > 50 {
-                return Some(Message::Reset);
+                return update(model, Message::Reset);
             }
         },
         Message::Decrement => {
             model.counter -= 1;
             if model.counter < -50 {
-                return Some(Message::Reset);
+                return update(model, Message::Reset);
             }
         },
         Message::Reset => {
@@ -46,14 +49,16 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             model.running_state = RunningState::ShouldQuit;
         },
         Message::Render => {
-            return Some(Message::FpsCounterMessage(
-                fps_counter::FpsCounterMessage::Render,
-            ));
+            return update(
+                model,
+                Message::FpsCounterMessage(fps_counter::FpsCounterMessage::Render),
+            );
         },
         Message::Tick => {
-            return Some(Message::FpsCounterMessage(
-                fps_counter::FpsCounterMessage::Tick,
-            ));
+            return update(
+                model,
+                Message::FpsCounterMessage(fps_counter::FpsCounterMessage::Tick),
+            );
         },
         Message::Resize(w, h) => {
             model.tui_size.width = w;
@@ -63,7 +68,7 @@ pub fn update(model: &mut Model, msg: Message) -> Option<Message> {
             return fps_counter::update(model, m);
         },
     }
-    None
+    (model, Cmd::None)
 }
 
 #[cfg(test)]
@@ -79,41 +84,35 @@ mod tests {
     fn test_increment() {
         let mut model = model_setup();
         model.counter = -4;
-        let res = update(&mut model, Message::Increment);
-        assert_eq!(res, None);
+        let (model, cmd) = update(model, Message::Increment);
         assert_eq!(model.counter, -3);
+        assert!(matches!(cmd, Cmd::None));
     }
 
     #[test]
     fn test_decrement() {
         let mut model = model_setup();
         model.counter = 35;
-        let res = update(&mut model, Message::Decrement);
-        assert_eq!(res, None);
+        let (model, cmd) = update(model, Message::Decrement);
         assert_eq!(model.counter, 34);
+        assert!(matches!(cmd, Cmd::None));
     }
 
     #[test]
     fn test_increment_saturating() {
         let mut model = model_setup();
         model.counter = 50;
-        let res = update(&mut model, Message::Increment);
-        assert_eq!(res, Some(Message::Reset));
-        assert_eq!(model.counter, 51);
-        let res = update(&mut model, res.unwrap());
-        assert_eq!(res, None);
+        let (model, cmd) = update(model, Message::Increment);
         assert_eq!(model.counter, 0);
+        assert!(matches!(cmd, Cmd::None));
     }
 
     #[test]
     fn test_decrement_saturating() {
         let mut model = model_setup();
         model.counter = -50;
-        let res = update(&mut model, Message::Decrement);
-        assert_eq!(res, Some(Message::Reset));
-        assert_eq!(model.counter, -51);
-        let res = update(&mut model, res.unwrap());
-        assert_eq!(res, None);
+        let (model, cmd) = update(model, Message::Decrement);
         assert_eq!(model.counter, 0);
+        assert!(matches!(cmd, Cmd::None));
     }
 }

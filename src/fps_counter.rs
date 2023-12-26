@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use ratatui::{prelude::*, widgets::*};
 
-use crate::{message::Message, model::Model, tui::Frame};
+use crate::{command::Cmd, message::Message, model::Model, tui::Frame};
 
 #[derive(Debug)]
 pub struct FpsCounterModel {
@@ -34,10 +34,10 @@ pub enum FpsCounterMessage {
     Tick,
 }
 
-pub fn update(model: &mut Model, msg: FpsCounterMessage) -> Option<Message> {
+pub fn update(mut model: Model, msg: FpsCounterMessage) -> (Model, Cmd<Message>) {
     let fps_model = &mut model.fps_counter;
     match msg {
-        FpsCounterMessage::Render => {
+        FpsCounterMessage::Tick => {
             fps_model.app_frames += 1;
             let now = Instant::now();
             let elapsed = (now - fps_model.app_start_time).as_secs_f32();
@@ -46,11 +46,9 @@ pub fn update(model: &mut Model, msg: FpsCounterMessage) -> Option<Message> {
                 fps_model.app_start_time = now;
                 fps_model.app_frames = 0;
             }
-
-            None
         },
 
-        FpsCounterMessage::Tick => {
+        FpsCounterMessage::Render => {
             fps_model.render_frames += 1;
             let now = Instant::now();
             let elapsed = (now - fps_model.render_start_time).as_secs_f32();
@@ -59,10 +57,9 @@ pub fn update(model: &mut Model, msg: FpsCounterMessage) -> Option<Message> {
                 fps_model.render_start_time = now;
                 fps_model.render_frames = 0;
             }
-
-            None
         },
     }
+    (model, Cmd::None)
 }
 
 pub fn view(model: &mut Model, f: &mut Frame, area: Rect) {
